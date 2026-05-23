@@ -1,6 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator
 from django.db.models import PROTECT
+from django.contrib.auth.models import AbstractUser
 
 
 class Disponibilidade(models.Model):
@@ -65,6 +66,17 @@ class Funcionario(models.Model):
 
     def __str__(self):
         return self.nome
+    
+    
+class Atendente(AbstractUser):
+    funcionario = models.OneToOneField(
+        Funcionario,
+        on_delete=PROTECT
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
 
 
 class CNH(models.Model):
