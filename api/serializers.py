@@ -1,19 +1,38 @@
-from rest_framework import serializers
-from .models import (
-    Motorista, Veiculo, Profissional, Equipe,
-    Ocorrencia, TipoRegistro, Cargo,
-    Prioridade, Status, Paciente, Disponibilidade
-)
+from datetime import date
 
-class MotoristaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Motorista
-        fields = '__all__'
+from rest_framework import serializers
+
+from .models import (
+    Veiculo,
+    Funcionario,
+    CNH,
+    ProfissionalSaude,
+    Equipe,
+    Ocorrencia,
+    TipoRegistro,
+    Cargo,
+    Prioridade,
+    Status,
+    Paciente,
+    Disponibilidade
+)
 
 
 class VeiculoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Veiculo
+        fields = '__all__'
+
+
+class FuncionarioSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Funcionario
+        fields = '__all__'
+
+
+class CNHSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CNH
         fields = '__all__'
 
 
@@ -51,29 +70,33 @@ class PacienteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Paciente
         fields = '__all__'
-        
 
-class ProfissionalSerializer(serializers.ModelSerializer):
+
+class ProfissionalSaudeSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Profissional
+        model = ProfissionalSaude
         fields = '__all__'
 
     def validate(self, data):
-        tipo = data.get('tipo_registro')
-        numero = data.get('numero_registro')
+        cargo = data.get('cargo')
+        numero_registro = data.get('numero_registro')
 
-        if tipo and not numero:
-            raise serializers.ValidationError("numero de registro obrigatório")
+        if cargo.tipo_registro and not numero_registro:
+            raise serializers.ValidationError(
+                "numero de registro obrigatorio"
+            )
 
-        if numero and not tipo:
-            raise serializers.ValidationError("tipo de registro obrigatório")
+        if not cargo.tipo_registro and numero_registro:
+            raise serializers.ValidationError(
+                "esse cargo nao exige registro"
+            )
 
         return data
-    
-    
+
+
 class EquipeSerializer(serializers.ModelSerializer):
     profissionais = serializers.PrimaryKeyRelatedField(
-        queryset=Profissional.objects.all(),
+        queryset=ProfissionalSaude.objects.all(),
         many=True
     )
 
@@ -82,38 +105,149 @@ class EquipeSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def validate(self, data):
-        motorista = data.get('motorista')
+        condutor = data.get('condutor')
         profissionais = data.get('profissionais', [])
         veiculo = data.get('veiculo')
 
-        if len(profissionais) == 0:
-            raise serializers.ValidationError("equipe precisa de pelo menos 1 profissional")
+        if not self.instance and len(profissionais) == 0:
+            raise serializers.ValidationError(
+                "equipe precisa de pelo menos 1 profissional"
+            )
 
-        equipes = Equipe.objects.filter(motorista=motorista, veiculo=veiculo)
+        profissionais_funcionarios = [
+            prof.funcionario for prof in profissionais
+        ]
+
+        if condutor not in profissionais_funcionarios:
+            raise serializers.ValidationError(
+                "condutor deve fazer parte dos profissionais"
+            )
+
+        try:
+            cnh = condutor.cnh
+        except CNH.DoesNotExist:
+            raise serializers.ValidationError(
+                "condutor nao possui cnh"
+            )
+
+        if cnh.validade < date.today():
+            raise serializers.ValidationError(
+                "cnh vencida"
+            )
+
+        ordem_categoria = {
+            "A": 1,
+            "B": 2,
+            "C": 3,
+            "D": 4,
+            "E": 5
+        }
+
+        categoria_condutor = ordem_categoria.get(cnh.categoria)
+        categoria_veiculo = ordem_categoria.get(veiculo.cnh_necessaria)
+
+        if categoria_condutor < categoria_veiculo:
+            raise serializers.ValidationError(
+                "categoria da cnh incompativel"
+            )
+
+        equipes_veiculo = Equipe.objects.filter(
+            veiculo=veiculo
+        )
 
         if self.instance:
-            equipes = equipes.exclude(id=self.instance.id)
+            equipes_veiculo = equipes_veiculo.exclude(
+                id=self.instance.id
+            )
 
-        for equipe in equipes:
-            if set(equipe.profissionais.values_list('id', flat=True)) == set([p.id for p in profissionais]):
-                raise serializers.ValidationError("essa equipe ja existe")
-
-        if Equipe.objects.filter(
-            motorista=motorista,
-            disponibilidade__codigo__in=["DISPONIVEL", "ATENDENDO"]
-        ).exists():
-            raise serializers.ValidationError("motorista ja esta em outra equipe ativa")
+        if equipes_veiculo.exists():
+            raise serializers.ValidationError(
+                "veiculo ja pertence a outra equipe"
+            )
 
         for prof in profissionais:
-            if Equipe.objects.filter(
-                profissionais=prof,
-                disponibilidade__codigo__in=["DISPONIVEL", "ATENDENDO"]
-            ).exists():
-                raise serializers.ValidationError(f"profissional '{prof.nome}' ocupado")
+            equipes_prof = Equipe.objects.filter(
+                profissionais=prof
+            )
+
+            if self.instance:
+                equipes_prof = equipes_prof.exclude(
+                    id=self.instance.id
+                )
+
+            if equipes_prof.exists():
+                raise serializers.ValidationError(
+                    f"profissional '{prof.funcionario.nome}' ja pertence a outra equipe"
+                )
 
         return data
-    
-    
+
+    def create(self, validated_data):
+        profissionais = validated_data.pop('profissionais')
+
+        equipe = Equipe.objects.create(**validated_data)
+
+        equipe.profissionais.set(profissionais)
+
+        disp_ocupado = Disponibilidade.objects.get(
+            nome="OCUPADO"
+        )
+
+        for prof in profissionais:
+            funcionario = prof.funcionario
+
+            funcionario.disponibilidade = disp_ocupado
+            funcionario.save()
+
+        return equipe
+
+    def update(self, instance, validated_data):
+        novos_profissionais = validated_data.pop(
+            'profissionais',
+            None
+        )
+
+        equipe = super().update(instance, validated_data)
+
+        if novos_profissionais is not None:
+            disp_disponivel = Disponibilidade.objects.get(
+                nome="DISPONIVEL"
+            )
+
+            disp_ocupado = Disponibilidade.objects.get(
+                nome="OCUPADO"
+            )
+
+            antigos = set(
+                instance.profissionais.all()
+            )
+
+            novos = set(
+                novos_profissionais
+            )
+
+            removidos = antigos - novos
+            adicionados = novos - antigos
+
+            for prof in removidos:
+                funcionario = prof.funcionario
+
+                funcionario.disponibilidade = disp_disponivel
+                funcionario.save()
+
+            for prof in adicionados:
+                funcionario = prof.funcionario
+
+                funcionario.disponibilidade = disp_ocupado
+                funcionario.save()
+
+            equipe.profissionais.set(
+                novos_profissionais
+            )
+
+        return equipe
+
+
 class OcorrenciaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ocorrencia
@@ -125,57 +259,90 @@ class OcorrenciaSerializer(serializers.ModelSerializer):
         hh = data.get('horario_chegada_hospital')
 
         if ha and hc and ha < hc:
-            raise serializers.ValidationError("atendimento antes do chamado")
+            raise serializers.ValidationError(
+                "atendimento antes do chamado"
+            )
 
         if hh and ha and hh < ha:
-            raise serializers.ValidationError("chegada antes do atendimento")
+            raise serializers.ValidationError(
+                "chegada antes do atendimento"
+            )
 
         return data
-    
+
     def update(self, instance, validated_data):
-        novo_status = validated_data.get('status', instance.status)
-        nova_equipe = validated_data.get('equipe', instance.equipe)
+        novo_status = validated_data.get(
+            'status',
+            instance.status
+        )
 
-        disp_atendendo = Disponibilidade.objects.get(codigo="ATENDENDO")
-        disp_disponivel = Disponibilidade.objects.get(codigo="DISPONIVEL")
+        nova_equipe = validated_data.get(
+            'equipe',
+            instance.equipe
+        )
 
-        if instance.status.codigo == "FINALIZADO":
-            raise serializers.ValidationError("ocorrencia finalizada nao pode ser alterada")
+        disp_atendendo = Disponibilidade.objects.get(
+            nome="ATENDENDO"
+        )
 
-        if instance.status.codigo == "EM_ATENDIMENTO":
-            allowed = {'paciente', 'horario_atendimento', 'horario_chegada_hospital', 'status'}
-            for campo in validated_data.keys():
-                if campo not in allowed:
-                    raise serializers.ValidationError("em atendimento só permite alterações específicas")
+        disp_disponivel = Disponibilidade.objects.get(
+            nome="DISPONIVEL"
+        )
 
-        atribuindo_equipe = instance.equipe is None and nova_equipe is not None
+        if instance.status.nome == "FINALIZADO":
+            raise serializers.ValidationError(
+                "ocorrencia finalizada nao pode ser alterada"
+            )
+
+        if instance.equipe and nova_equipe != instance.equipe:
+            raise serializers.ValidationError(
+                "nao pode trocar equipe"
+            )
+
+        atribuindo_equipe = (
+            instance.equipe is None and
+            nova_equipe is not None
+        )
 
         if atribuindo_equipe:
-            if instance.status.codigo != "ABERTO":
-                raise serializers.ValidationError("so pode atribuir equipe quando aberto")
-
-            if nova_equipe.disponibilidade.codigo != "DISPONIVEL":
-                raise serializers.ValidationError("equipe nao disponivel")
+            if nova_equipe.disponibilidade.nome != "DISPONIVEL":
+                raise serializers.ValidationError(
+                    "equipe nao disponivel"
+                )
 
             nova_equipe.disponibilidade = disp_atendendo
             nova_equipe.save()
 
-        if instance.equipe and nova_equipe and instance.equipe != nova_equipe:
-            raise serializers.ValidationError("nao pode trocar equipe")
+            nova_equipe.veiculo.disponibilidade = disp_atendendo
+            nova_equipe.veiculo.save()
 
-        instance = super().update(instance, validated_data)
+        instance = super().update(
+            instance,
+            validated_data
+        )
 
         if atribuindo_equipe:
-            instance.motorista = nova_equipe.motorista
+            instance.condutor = nova_equipe.condutor
+
             instance.veiculo = nova_equipe.veiculo
+
             instance.save()
 
-            instance.profissionais.set(nova_equipe.profissionais.all())
+            instance.profissionais.set(
+                nova_equipe.profissionais.all()
+            )
 
-        if instance.status.codigo != "FINALIZADO" and novo_status.codigo == "FINALIZADO":
+        if (
+            instance.status.nome != "FINALIZADO" and
+            novo_status.nome == "FINALIZADO"
+        ):
             if instance.equipe:
                 equipe = instance.equipe
+
                 equipe.disponibilidade = disp_disponivel
                 equipe.save()
+
+                equipe.veiculo.disponibilidade = disp_disponivel
+                equipe.veiculo.save()
 
         return instance
