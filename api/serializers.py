@@ -270,7 +270,18 @@ class OcorrenciaSerializer(serializers.ModelSerializer):
 
         return data
 
+    def create(self, validated_data):
+        validated_data['created_by'] = (
+            self.context['request'].user
+        )
+
+        return super().create(validated_data)
+
     def update(self, instance, validated_data):
+        validated_data['updated_by'] = (
+            self.context['request'].user
+        )
+
         novo_status = validated_data.get(
             'status',
             instance.status

@@ -2,6 +2,7 @@ from django.db import models
 from django.core.validators import MinValueValidator
 from django.db.models import PROTECT
 from django.contrib.auth.models import AbstractUser
+from django.conf import settings
 
 
 class Disponibilidade(models.Model):
@@ -203,8 +204,21 @@ class Ocorrencia(models.Model):
         blank=True
     )
 
-    created_at = models.DateTimeField(
-        auto_now_add=True
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=PROTECT,
+        related_name='ocorrencias_criadas'
+    )
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=PROTECT,
+        related_name='ocorrencias_atualizadas',
+        null=True,
+        blank=True
     )
 
     def __str__(self):
