@@ -15,7 +15,9 @@ from .models import (
     Status,
     Paciente,
     Disponibilidade,
-    Atendente
+    Atendente,
+    Manutencao,
+    Abastecimento
 )
 
 
@@ -376,3 +378,14 @@ class AtendenteSerializer(serializers.ModelSerializer):
 
         return user
     
+
+class ManutencaoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Manutencao
+        fields = '__all__'
+
+
+class AbastecimentoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Abastecimento
+        fields = '__all__'
