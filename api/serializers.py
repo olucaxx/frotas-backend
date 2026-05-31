@@ -14,7 +14,8 @@ from .models import (
     Prioridade,
     Status,
     Paciente,
-    Disponibilidade
+    Disponibilidade,
+    Atendente
 )
 
 
@@ -357,3 +358,21 @@ class OcorrenciaSerializer(serializers.ModelSerializer):
                 equipe.veiculo.save()
 
         return instance
+
+
+class AtendenteSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True)
+
+    class Meta:
+        model = Atendente
+        fields = ['id', 'username', 'password', 'funcionario', 'created_at']
+
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+
+        user = Atendente(**validated_data)
+        user.set_password(password)
+        user.save()
+
+        return user
+    

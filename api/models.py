@@ -7,6 +7,7 @@ from django.conf import settings
 
 class Disponibilidade(models.Model):
     nome = models.CharField(max_length=50, unique=True)
+    codigo = models.CharField(max_length=50, unique=True)
 
     def __str__(self):
         return self.nome
